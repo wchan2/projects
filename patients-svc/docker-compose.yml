@@ -1,0 +1,11 @@
+version: '3.4'
+services:
+  patient-svc:
+    container_name: patient-svc
+    image: patient-svc
+    build:
+      context: .
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./:/usr/local/opt
