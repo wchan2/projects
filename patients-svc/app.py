@@ -27,4 +27,4 @@ def close_connection(exception):
         db.close()
 
 if __name__ == '__main__':
-    app.run(debug=os.getenv('debug', True), host="0.0.0.0", port=5000)
+    app.run(debug=not os.getenv('debug', False), host="0.0.0.0", port=5000)
