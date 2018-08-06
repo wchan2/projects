@@ -67,3 +67,9 @@ def test_patients_crud(client):
     assert delete_response.status_code == 204, 'Expected delete response status to be 204 but got {0}'.format(delete_response.status)
     get_patient_data = json.loads(client.get(patient_path).data)
     assert get_patient_data == '', 'Expected deleted patient to be empty but got `{0}`'.format(get_patient_data)
+
+def test_create_patient_age_less_than_8(client):
+    pass
+
+def test_create_patient_bad_dob(client):
+    pass
