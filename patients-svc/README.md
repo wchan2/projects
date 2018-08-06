@@ -7,6 +7,12 @@ CRUD app that lists, creates, reads, updates and deletes patient data
 - [Docker](https://www.docker.com/)
 - [docker-compose](https://docs.docker.com/compose/)
 
+## Frameworks & Libraries Used
+
+- [Flask](http://flask.pocoo.org/)
+- [Flask-RESTful](https://flask-restful.readthedocs.io/en/latest/)
+- [pytest](https://docs.pytest.org/en/latest/)
+
 ## Environment Variables
 
 - `debug` - setting this to any value will turn it off
@@ -34,6 +40,7 @@ sqlite3 database.db
 
 ## Areas of improvement
 
+- Add unit tests
 - Return age on get requests
 - Add database schema: enums for `status`, `terms_accepted` and `gender` and automatically set the date for `terms_accepted_at`
 - Remove `terms_accepted_at` for HTTP requests
