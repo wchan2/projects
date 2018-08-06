@@ -55,7 +55,7 @@ class Patients(Resource):
 
     def get(self):
         response = self._patient_repo.list(
-            self._param('limit'), self._param('offset'))
+            self._params('limit'), self._params('offset'))
         return response, 200
 
     def _params(self, key):
@@ -73,6 +73,7 @@ class Patient(Resource):
         response = self._patient_repo.find_by_id(id)
         if response == None:
             return '', 404
+        response['terms_accepted'] = int(response['terms_accepted'])
         return response, 200
 
     def put(self, id):
