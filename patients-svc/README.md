@@ -41,8 +41,6 @@ sqlite3 database.db
 ## Areas of improvement
 
 - Add unit tests
-- Return age on get requests
-- Add database schema: enums for `status`, `terms_accepted` and `gender` and automatically set the date for `terms_accepted_at`
 - Remove `terms_accepted_at` for HTTP requests
 - Add patient data validation: `phone`, `age`, `dob`, `email` and enumerated fields
 - Add patient response marshaling
