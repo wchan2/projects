@@ -23,7 +23,7 @@ CRUD app that lists, creates, reads, updates and deletes patient data
 ```sh
 make start # build the image and start the application
 make test  # run tests (works only when application is started)
-make clean # removes the Docker container and 
+make clean # removes the Docker container and image
 make logs  # watch application logs
 ```
 
