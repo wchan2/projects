@@ -46,3 +46,4 @@ sqlite3 database.db
 - Add patient response marshaling
 - Add database migration strategy
 - Add test fixtures instead of using the current database for testing
+- Add logging and monitoring
