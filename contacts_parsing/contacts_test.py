@@ -69,7 +69,7 @@ class TestFullName(unittest.TestCase):
                          '(', ')', '!', '@', '#', '<', '>', '?', '/', '\\', '[', ']', '{', '}', '=']
         for char in invalid_chars:
             with self.assertRaises(ValueError):
-                last_name('First{0} La{0}st'.format(char))
+                full_name('First{0} La{0}st'.format(char))
 
 class TestColor(unittest.TestCase):
     def test_color_with_capitalize_letter(self):
