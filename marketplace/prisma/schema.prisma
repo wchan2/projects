@@ -1,0 +1,93 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// A seller onboarded onto the connected payment gateway (Stripe Express account today).
+model Seller {
+  id                String   @id @default(cuid())
+  email             String   @unique
+  gatewayAccountId  String   @unique // Stripe connected account id
+  chargesEnabled    Boolean  @default(false)
+  payoutsEnabled    Boolean  @default(false)
+  detailsSubmitted  Boolean  @default(false)
+
+  // Reserved for the future seller-configurable refund workflow (deferred).
+  // Not read or enforced by the engine yet.
+  refundPolicy      RefundPolicy @default(MANUAL_REVIEW)
+
+  charges           Charge[]
+  payouts           Payout[]
+
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+}
+
+enum RefundPolicy {
+  NO_REFUNDS
+  AUTO_APPROVE_WINDOW
+  MANUAL_REVIEW
+}
+
+// A split payment: buyer pays the platform, platform keeps applicationFeeAmount,
+// the rest transfers to the seller's connected account (destination charge).
+model Charge {
+  id                    String       @id @default(cuid())
+  seller                Seller       @relation(fields: [sellerId], references: [id])
+  sellerId              String
+
+  gatewayPaymentIntentId String      @unique
+  amount                Int          // total charge amount, in minor units (cents)
+  applicationFeeAmount  Int          // platform's cut, in minor units (cents)
+  currency              String       @default("usd")
+  status                ChargeStatus @default(PENDING)
+
+  createdAt             DateTime     @default(now())
+  updatedAt             DateTime     @updatedAt
+}
+
+enum ChargeStatus {
+  PENDING
+  SUCCEEDED
+  REFUNDED
+  PARTIALLY_REFUNDED
+  DISPUTED
+  FAILED
+}
+
+// Record of payouts from the seller's connected account balance to their bank,
+// populated from gateway payout webhooks (Stripe manages the actual transfer schedule).
+model Payout {
+  id              String       @id @default(cuid())
+  seller          Seller       @relation(fields: [sellerId], references: [id])
+  sellerId        String
+
+  gatewayPayoutId String       @unique
+  amount          Int
+  currency        String       @default("usd")
+  status          PayoutStatus @default(PENDING)
+  arrivalDate     DateTime?
+
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+}
+
+enum PayoutStatus {
+  PENDING
+  PAID
+  FAILED
+}
+
+// Dedupe/audit log for inbound gateway webhook events.
+model WebhookEvent {
+  id            String    @id @default(cuid())
+  gatewayEventId String   @unique
+  type          String
+  payload       Json
+  processedAt   DateTime?
+  createdAt     DateTime  @default(now())
+}
