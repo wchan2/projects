@@ -38,7 +38,7 @@ SENSITIVITY_GRID = {
 
 
 def run(data: pd.DataFrame, params: dict, ctx: Context) -> StrategyResult:
-    """data: price, signal, vix, rf."""
+    """data: price, signal, vix, risk_free."""
     feat = build_features(data, params)
     equity, weights, trades, events = scale_in(feat, params, ctx)
     trades = trades.rename(columns={"ref_value": "vix_peak", "ref_date": "vix_peak_date"})

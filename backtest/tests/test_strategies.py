@@ -66,7 +66,7 @@ def test_buy_and_hold_defaults_to_the_whole_history(noisy_market):
 def _market(vix_points, n=None):
     vix = piecewise(vix_points)
     price = pd.Series(100.0, vix.index)
-    return pd.DataFrame({"price": price, "signal": price, "vix": vix, "rf": 0.0})
+    return pd.DataFrame({"price": price, "signal": price, "vix": vix, "risk_free": 0.0})
 
 
 def test_vix_signal_waits_for_peak_pullback_and_gradual_decline():
@@ -89,7 +89,7 @@ def test_rsi_is_bounded_and_oversold_signal_needs_a_bounce():
     close = piecewise([(0, 100), (60, 100), (90, 60), (110, 60), (150, 80)])
     strength = rsi(close, 14).dropna()
     assert strength.between(0, 100).all() and strength.min() < 30
-    data = pd.DataFrame({"price": close, "signal": close, "vix": 20.0, "rf": 0.0})
+    data = pd.DataFrame({"price": close, "signal": close, "vix": 20.0, "risk_free": 0.0})
     feat = rsi_features(data, rsi_oversold_bounce.PARAMS)
     first = feat.index[feat["trigger"]][0]
     assert (

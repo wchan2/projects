@@ -17,7 +17,7 @@ PARAMS = {
 
 
 def run(data: pd.DataFrame, params: dict, ctx: Context) -> StrategyResult:
-    """data: price, vix, rf. Held from the close of the first trading day >= start until the
+    """data: price, vix, risk_free. Held from the close of the first trading day >= start until the
     close of the first trading day >= end (still held at the last date if end is None)."""
     price, dates = data["price"], data.index
     first = int(dates.searchsorted(pd.Timestamp(params["start"]))) if params.get("start") else 0
@@ -28,7 +28,7 @@ def run(data: pd.DataFrame, params: dict, ctx: Context) -> StrategyResult:
     held = np.zeros(len(dates))
     held[first : min(last, len(dates))] = 1.0  # weight is post-trade: flat again at the exit close
     weights = pd.Series(held, dates, name="weight")
-    equity = equity_from_weights(price, data["rf"], weights, ctx)
+    equity = equity_from_weights(price, data["risk_free"], weights, ctx)
 
     exit_i = min(last, len(dates) - 1)
     path = price.iloc[first : exit_i + 1]

@@ -74,11 +74,11 @@ params to `STRATEGY.run`). The default values above are starting guesses, not op
 ## 4. How it works
 
 ```
-main.py ──► data.py ──► (price, signal, vix, rf) ──► strategies/* ──► StrategyResult ──► report.py
-              │                                          │                  │
-        cached parquet                      strategy.py (contract,     metrics.py · benchmarks.py
-                                            scale-in engine) ·         sensitivity.py
-                                            signals.py · portfolio.py
+main.py ──► data.py ──► (price, signal, vix, risk_free) ──► strategies/* ──► StrategyResult ──► report.py
+              │                                                │                  │
+        cached parquet                            strategy.py (contract,     metrics.py · benchmarks.py
+                                                  scale-in engine) ·         sensitivity.py
+                                                  signals.py · portfolio.py
 ```
 
 ### Data (`data.py`)
@@ -87,7 +87,7 @@ main.py ──► data.py ──► (price, signal, vix, rf) ──► strategie
 - Prices are real only: a backtest starts when the instrument started trading, and `--start` /
   `--end` limit the window (default: the last 5 years). Nothing is ever simulated before the
   instrument existed.
-- `build_dataset()` returns one standard frame (`price`, `signal`, `vix`, `rf`) that every strategy
+- `build_dataset()` returns one standard frame (`price`, `signal`, `vix`, `risk_free`) that every strategy
   consumes. `signal` is the series strategies read their signals from: the index a leveraged fund
   tracks (`SIGNAL_INDEX`, e.g. `^NDX` for TQQQ) or the instrument itself.
 
@@ -98,7 +98,7 @@ main.py ──► data.py ──► (price, signal, vix, rf) ──► strategie
 - `Context` holds backtest-wide settings: capital, execution lag, cash earning the risk-free rate,
   slippage.
 - The "wait for a signal, scale in, hold, sell" strategies share one engine, `scale_in()`: equal weekly
-  tranches (each checked against optional filters), a timed exit, cash earning rf, proceeds redeployed
+  tranches (each checked against optional filters), a timed exit, cash earning the risk-free rate, proceeds redeployed
   at the next episode (**chaining**), and triggers during an open position logged as `skipped`. A
   strategy only has to produce its trigger.
 - **No lookahead:** decisions use only data up to that date, and orders fill `execution_lag` days later.

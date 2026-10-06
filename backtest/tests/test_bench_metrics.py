@@ -38,9 +38,9 @@ def test_benchmarks_are_buy_and_hold_entered_with_the_strategy(noisy_market):
 def test_engine_equity_matches_weights(noisy_market):
     """Equity recomputed from the reported weights equals the simulated equity (no costs)."""
     r = run(noisy_market)
-    px, rf = noisy_market["price"], noisy_market["rf"]
+    px, risk_free = noisy_market["price"], noisy_market["risk_free"]
     w = r.weights.shift(1).fillna(0)
-    ret = w * px.pct_change().fillna(0) + (1 - w) * (rf.shift(1) / 252).fillna(0)
+    ret = w * px.pct_change().fillna(0) + (1 - w) * (risk_free.shift(1) / 252).fillna(0)
     np.testing.assert_allclose(1e4 * (1 + ret).cumprod(), r.equity, rtol=1e-9)
 
 

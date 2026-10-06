@@ -2,7 +2,7 @@
 
 A strategy is a `Strategy` object: a description, default `params`, a
 `run(data, params, ctx) -> StrategyResult` function and its own sensitivity grid. Feed `run` the
-standard dataset (price, signal, vix, rf) and extract performance with `metrics.performance`.
+standard dataset (price, signal, vix, risk_free) and extract performance with `metrics.performance`.
 
 Strategies live in `strategies/`. The ones built on "wait for a signal, scale in, hold, sell" only
 need to produce a feature frame and hand it to `scale_in()`.
@@ -25,7 +25,7 @@ class Context:
     initial_capital: float = 10_000
     trading_days: int = 252
     execution_lag: int = 1  # decided at close t, filled at close t+lag
-    cash_earns_rf: bool = True  # False = cash earns 0
+    cash_earns_risk_free: bool = True  # False = cash earns 0
     cost_bps: float = 0.0  # slippage per fill; taxes are not modelled
 
 
@@ -53,14 +53,18 @@ class Strategy:
 
 def equity_from_weights(
     price: pd.Series,
-    rf: pd.Series,
+    risk_free: pd.Series,
     weights: pd.Series,
     ctx: Context,
 ) -> pd.Series:
     """Equity of a book that holds `weights[t-1]` of the instrument over day t (weights are
     post-trade at each close) and keeps the rest in cash."""
     returns = price.pct_change().fillna(0)
-    cash_returns = (rf.shift(1) / ctx.trading_days).fillna(0) if ctx.cash_earns_rf else 0 * returns
+    cash_returns = (
+        (risk_free.shift(1) / ctx.trading_days).fillna(0)
+        if ctx.cash_earns_risk_free
+        else 0 * returns
+    )
     held = weights.shift(1).fillna(0)
     turnover = weights.diff().abs().fillna(weights.abs())
     daily = held * returns + (1 - held) * cash_returns - turnover * ctx.cost_bps / 1e4
@@ -68,7 +72,7 @@ def equity_from_weights(
 
 
 # ---- scale-in / timed-exit engine ----------------------------------------------------------------
-# Required feature columns: price, rf, vix, episode_id (-1 = none), trigger, filters_pass,
+# Required feature columns: price, risk_free, vix, episode_id (-1 = none), trigger, filters_pass,
 # first_fail, ref_value, ref_date (the signal's reference level, recorded on the trade).
 # Required params: buy_weeks, tranche_step_days, hold_years, chained.
 
@@ -128,7 +132,7 @@ def _simulate(
     fills scheduled for today -> timed exit -> record. Orders decided at t fill at t+lag."""
     dates, n = feat.index, len(feat)
     price = feat["price"].to_numpy()
-    rf = feat["rf"].fillna(0).to_numpy()
+    risk_free = feat["risk_free"].fillna(0).to_numpy()
     lag, chained = ctx.execution_lag, params["chained"]
     pf = Portfolio(ctx.initial_capital, cost_bps=ctx.cost_bps)
     log = EventLog()
@@ -138,8 +142,8 @@ def _simulate(
     equity, weights = np.empty(n), np.empty(n)
 
     for i in range(n):
-        if i > 0 and ctx.cash_earns_rf:
-            pf.accrue(rf[i - 1] / ctx.trading_days)
+        if i > 0 and ctx.cash_earns_risk_free:
+            pf.accrue(risk_free[i - 1] / ctx.trading_days)
 
         # ---- decisions at the close of day i -----------------------------------------------
         if feat["trigger"].iat[i]:

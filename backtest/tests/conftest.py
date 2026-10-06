@@ -41,5 +41,5 @@ def noisy_market(known_crashes):
     rng = np.random.default_rng(1)
     s = known_crashes * np.exp(rng.normal(0, 0.008, len(known_crashes)))
     vix = pd.Series(15 + 60 * (1 - s / s.cummax()), s.index, name="vix").clip(lower=10)
-    rf = pd.Series(0.02, s.index)
-    return pd.DataFrame({"price": 3 * s, "signal": s, "vix": vix, "rf": rf})
+    risk_free = pd.Series(0.02, s.index)
+    return pd.DataFrame({"price": 3 * s, "signal": s, "vix": vix, "risk_free": risk_free})

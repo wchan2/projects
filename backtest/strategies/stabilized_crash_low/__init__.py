@@ -40,7 +40,7 @@ SENSITIVITY_GRID = {
 
 
 def run(data: pd.DataFrame, params: dict, ctx: Context) -> StrategyResult:
-    """data: price, signal, vix, rf."""
+    """data: price, signal, vix, risk_free."""
     feat = build_features(data, params)
     feat["ref_value"], feat["ref_date"] = feat["ep_low"], feat["ep_low_date"]
     table = detect_crash_episodes(

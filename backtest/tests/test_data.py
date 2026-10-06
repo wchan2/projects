@@ -26,16 +26,16 @@ def csv_settings(tmp_path, **overrides):
         csv_dir=str(tmp_path),
         cache_dir=str(tmp_path / "cache"),
         vix_ticker="VIX",
-        rf_ticker="IRX",
+        risk_free_ticker="IRX",
         **overrides,
     )
 
 
 def test_dataset_has_the_standard_columns(tmp_path):
     data, info = build_dataset("FAKE", csv_settings(tmp_path))
-    assert list(data.columns) == ["price", "signal", "vix", "rf"]
+    assert list(data.columns) == ["price", "signal", "vix", "risk_free"]
     assert info["signal"] == "FAKE"  # no SIGNAL_INDEX entry: the instrument is its own signal
-    assert (data["rf"] == 0.2).all()  # the IRX column holds 20 (percent) -> 0.20
+    assert (data["risk_free"] == 0.2).all()  # the IRX column holds 20 (percent) -> 0.20
 
 
 def test_backtest_starts_when_the_instrument_started_to_exist(tmp_path):

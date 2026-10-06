@@ -47,7 +47,7 @@ def test_trigger_during_open_position_is_skipped_and_logged():
             (700, 130),
         ]
     )
-    data = pd.DataFrame({"price": s, "signal": s, "vix": 20.0, "rf": 0.0})
+    data = pd.DataFrame({"price": s, "signal": s, "vix": 20.0, "risk_free": 0.0})
     params = {**NO_FILTERS, "hold_years": 5, "merge_gap_days": 5, "buy_weeks": 2}
     r = run(data, params)
     skipped = r.events[r.events.event == "skipped"]

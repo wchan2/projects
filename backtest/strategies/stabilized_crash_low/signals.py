@@ -50,8 +50,8 @@ def track_lows(signal: pd.Series, episode_id: pd.Series, stable_days: int) -> pd
 
 
 def build_features(data: pd.DataFrame, params: dict) -> pd.DataFrame:
-    """data columns: price, signal, vix, rf. Returns data + episode labels, lows, triggers and
-    filters."""
+    """data columns: price, signal, vix, risk_free. Returns data + episode labels, lows, triggers
+    and filters."""
     lab = label_episodes(
         data["signal"],
         params["crash_threshold"],

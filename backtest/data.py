@@ -22,8 +22,8 @@ class DataSettings:
     lookback_years: int | None = 5  # default window length when no start is given; None = all
     signal_index: str | None = None  # None = SIGNAL_INDEX[instrument], else the instrument itself
     vix_ticker: str = "^VIX"
-    rf_ticker: str = "^IRX"  # 13-week T-bill yield, quoted in percent
-    rf_default: float = 0.02  # annual rf where rf_ticker has no data
+    risk_free_ticker: str = "^IRX"  # 13-week T-bill yield, quoted in percent
+    risk_free_default: float = 0.02  # annual risk_free where risk_free_ticker has no data
 
 
 DEFAULT_SETTINGS = DataSettings()
@@ -122,7 +122,7 @@ def build_dataset(
               and moving averages are measured on the index rather than on the leveraged fund
               (the instrument itself if it has no entry in SIGNAL_INDEX),
     - vix:    VIX close (NaN where unavailable),
-    - rf:     annual risk-free rate as a decimal.
+    - risk_free:     annual risk-free rate as a decimal.
 
     Only real prices are used. The window is `settings.start` .. `settings.end_date`; with no
     start it is `lookback_years` before the end (default 5 years before today), and None means
@@ -130,8 +130,8 @@ def build_dataset(
     (frame, info).
     """
     signal_ticker = settings.signal_index or SIGNAL_INDEX.get(instrument, instrument)
-    tickers = [instrument, signal_ticker, settings.vix_ticker, settings.rf_ticker]
-    optional = {settings.vix_ticker, settings.rf_ticker}
+    tickers = [instrument, signal_ticker, settings.vix_ticker, settings.risk_free_ticker]
+    optional = {settings.vix_ticker, settings.risk_free_ticker}
     raw = load_prices(tickers, settings, refresh, optional=optional)
 
     price = raw[instrument].dropna().rename("price")
@@ -141,11 +141,11 @@ def build_dataset(
         df["vix"] = raw[settings.vix_ticker].reindex(price.index).ffill(limit=5)
     else:
         df["vix"] = np.nan
-    if settings.rf_ticker in raw:
-        rf = raw[settings.rf_ticker] / 100.0
-        df["rf"] = rf.reindex(price.index).ffill().fillna(settings.rf_default)
+    if settings.risk_free_ticker in raw:
+        risk_free = raw[settings.risk_free_ticker] / 100.0
+        df["risk_free"] = risk_free.reindex(price.index).ffill().fillna(settings.risk_free_default)
     else:
-        df["rf"] = settings.rf_default
+        df["risk_free"] = settings.risk_free_default
 
     end = pd.Timestamp(settings.end_date) if settings.end_date else (today or pd.Timestamp.today())
     start = settings.start
