@@ -12,11 +12,11 @@ from metrics import drawdown_series
 
 ASSUMPTIONS = [
     "Taxes and slippage are excluded unless configured (`Context.cost_bps`).",
-    "Pre-launch history of leveraged funds is synthetic (3 x daily index return - financing "
-    "- expense ratio); see the tracking-error table for how well it matches the real fund.",
-    "The sample of independent crashes is small, so results are illustrative, not predictive.",
-    "Episodes and the first-low / first-signal buy-and-hold anchors are detected with hindsight; "
-    "the strategy itself only uses data available on each date.",
+    "Only real prices are used: the backtest starts no earlier than the instrument's first "
+    "trading day, and nothing is simulated before it existed.",
+    "The sample of independent episodes is small, so results are illustrative, not predictive.",
+    "Episodes and the benchmark anchors (first low, first signal) are identified with hindsight; "
+    "the strategies themselves only use data available on each date.",
     "Orders decided at a close fill at the close `execution_lag` trading days later.",
 ]
 
@@ -66,7 +66,11 @@ def plot_drawdown(outdir, curves: dict, episodes: pd.DataFrame) -> Path:
 
 
 def plot_vix(
-    outdir, vix: pd.Series, trades: pd.DataFrame, episodes: pd.DataFrame, start=None
+    outdir,
+    vix: pd.Series,
+    trades: pd.DataFrame,
+    episodes: pd.DataFrame,
+    start=None,
 ) -> Path:
     v = vix.dropna().loc[start:] if start is not None else vix.dropna()
     fig, ax = plt.subplots(figsize=(11, 4))

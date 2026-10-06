@@ -3,6 +3,7 @@ import pandas as pd
 
 from strategies.stabilized_crash_low.episodes import label_episodes
 from strategies.stabilized_crash_low.signals import build_features, track_lows
+from tests.conftest import piecewise
 
 P = {
     "crash_threshold": 0.25,
@@ -17,7 +18,6 @@ P = {
 
 
 def test_stabilization_and_false_start():
-    from tests.conftest import piecewise
 
     # crash to 60, flat 70 days (stabilizes), new low 55, flat again, recover
     s = piecewise([(0, 100), (50, 60), (51, 60.5), (120, 60.5), (121, 55), (200, 55.5), (400, 105)])

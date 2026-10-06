@@ -2,18 +2,21 @@
 
     uv run python main.py                    # TQQQ
     uv run python main.py --instrument UPRO  # any ticker
+    uv run python main.py --start 2018-01-01 --end 2023-12-31
+    uv run python main.py --verbose          # full tables for every strategy
 
-Data settings live in data.py (DataSettings / INSTRUMENTS), strategy parameters and sensitivity
+Data settings live in data.py (DataSettings / SIGNAL_INDEX), strategy parameters and sensitivity
 grids live with each strategy in strategies/.
 """
 
 import argparse
+from dataclasses import replace
 from pathlib import Path
 
 import pandas as pd
 
 from benchmarks import build_benchmarks, standalone_summary
-from data import build_dataset
+from data import DEFAULT_SETTINGS, DataSettings, build_dataset
 from metrics import performance, window
 from report import (
     ASSUMPTIONS,
@@ -39,6 +42,7 @@ def backtest_strategy(
     instrument: str,
     out_dir: Path,
     run_sensitivity: bool,
+    verbose: bool,
 ) -> pd.DataFrame | None:
     """Run one strategy, write its tables / charts / report, return its summary table."""
     capital = ctx.initial_capital
@@ -63,15 +67,12 @@ def backtest_strategy(
     }
     sections = {
         "Strategy": strategy.description,
+        "Data window": data_window(instrument, info, len(data)),
         "Episodes (auto-detected)": episodes,
         "Trades": res.trades,
         "Summary": summary.reset_index(),
         "Skipped signals / events": res.events,
     }
-    if info["tracking"]:
-        tracking = pd.DataFrame([info["tracking"]])
-        tables["tracking_error"] = tracking
-        sections[f"Synthetic vs real {instrument} (overlap)"] = tracking
     if "chained" in strategy.params:
         standalone = strategy.run(data, {**strategy.params, "chained": False}, ctx)
         table = standalone_summary(standalone.trades, capital)
@@ -94,10 +95,22 @@ def backtest_strategy(
         curves[hold_name] = window(held.equity, held.eval_start, capital)
     plot_equity(out_dir, curves, episodes, f"{instrument}: {name} vs buy-and-hold")
     plot_drawdown(out_dir, {k: curves[k] for k in list(curves)[:2]}, episodes)
-    plot_vix(out_dir, data["vix"], res.trades, episodes, start=data.index[0])
+    plot_vix(out_dir, data["vix"], res.trades, episodes, data.index[0])
     write_report(out_dir, f"Backtest report: {name} on {instrument}", sections)
-    print_console(name, strategy, episodes, res.trades, res.events, summary, sections)
+    if verbose:
+        print_console(name, strategy, episodes, res.trades, res.events, summary, sections)
+    else:
+        print(f"{name}: {len(res.trades)} trades -> {out_dir}/report.md")
+        if "Sensitivity summary" in sections:
+            print(f"  sensitivity: {sections['Sensitivity summary']}")
     return summary
+
+
+def data_window(instrument: str, info: dict, n_days: int) -> str:
+    return (
+        f"{instrument}: {info['first_date']:%Y-%m-%d} to {info['last_date']:%Y-%m-%d} "
+        f"({n_days:,} trading days, signals from {info['signal']})"
+    )
 
 
 def print_console(
@@ -136,13 +149,16 @@ def print_console(
 
 def main(
     instrument: str = "TQQQ",
+    settings: DataSettings = DEFAULT_SETTINGS,
     capital: float = 10_000,
     refresh: bool = False,
     run_sensitivity: bool = True,
     output_dir: str = "outputs",
+    verbose: bool = False,
 ) -> pd.DataFrame:
     ctx = Context(initial_capital=capital)
-    data, info = build_dataset(instrument, refresh=refresh)
+    data, info = build_dataset(instrument, settings, refresh=refresh)
+    print(data_window(instrument, info, len(data)) + "\n")
     summaries = {}
     for name, strategy in discover().items():
         summary = backtest_strategy(
@@ -154,6 +170,7 @@ def main(
             instrument,
             Path(output_dir) / name,
             run_sensitivity,
+            verbose,
         )
         if summary is not None:
             summaries[name] = summary.iloc[0]  # the strategy's own row (holds are per-strategy)
@@ -162,23 +179,48 @@ def main(
     if len(comparison):
         save_csv(output_dir, "comparison", comparison)
         print(f"\n{'=' * 100}\nAll strategies on {instrument}\n{'=' * 100}")
-        print(comparison[["start", "final_value", "cagr", "max_drawdown", "sharpe", "n_trades"]])
-    print("\nAssumptions:\n" + "\n".join(f" - {a}" for a in ASSUMPTIONS))
+        columns = ["start", "final_value", "cagr", "max_drawdown", "sharpe", "n_trades"]
+        table = comparison[columns].copy()
+        table["start"] = pd.to_datetime(table["start"]).dt.date
+        print(table.to_string(float_format=lambda x: f"{x:,.3f}"))
+    if verbose:
+        print("\nAssumptions:\n" + "\n".join(f" - {a}" for a in ASSUMPTIONS))
+    else:
+        print("\nIllustrative only: small sample. Run with --verbose for full tables;")
+        print("assumptions are listed in each report.md.")
     return comparison
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--instrument", default="TQQQ", help="any ticker (default: TQQQ)")
+    parser.add_argument(
+        "--start", help="backtest start date, YYYY-MM-DD (default: 5 years before the end)"
+    )
+    parser.add_argument("--end", help="backtest end date, YYYY-MM-DD (default: latest data)")
+    parser.add_argument(
+        "--full-history",
+        action="store_true",
+        help="use all history from the instrument's first day (default: the last 5 years)",
+    )
     parser.add_argument("--capital", type=float, default=10_000)
     parser.add_argument("--refresh", action="store_true", help="re-download price data")
     parser.add_argument("--no-sensitivity", action="store_true", help="skip the parameter grids")
     parser.add_argument("--output-dir", default="outputs")
+    parser.add_argument("--verbose", action="store_true", help="print the full tables per strategy")
     args = parser.parse_args()
+    settings = replace(
+        DEFAULT_SETTINGS,
+        start=args.start,
+        end_date=args.end,
+        lookback_years=None if args.full_history else DEFAULT_SETTINGS.lookback_years,
+    )
     main(
         args.instrument,
+        settings,
         args.capital,
         args.refresh,
         not args.no_sensitivity,
         args.output_dir,
+        args.verbose,
     )

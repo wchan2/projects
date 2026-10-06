@@ -2,52 +2,81 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from data import build_synthetic_3x, splice_with_real, tracking_error
+from data import DataSettings, build_dataset, load_series
+
+TODAY = pd.Timestamp("2014-12-31")
 
 
-def _index(n=1500, seed=0):
-    rng = np.random.default_rng(seed)
-    idx = pd.bdate_range("2005-01-03", periods=n)
-    return pd.Series(1000 * np.exp(np.cumsum(rng.normal(3e-4, 0.012, n))), idx, name="IDX")
+def csv_settings(tmp_path, **overrides):
+    """Offline data source: CSV 'tickers' in a temp dir. FAKE only exists from 2012; VIX and the
+    rate (IRX) go back to 2010. The full history is used unless a test says otherwise."""
+    overrides.setdefault("lookback_years", None)
+    index = pd.bdate_range("2010-01-04", TODAY)
+    rng = np.random.default_rng(0)
+    for name, first in (("FAKE", "2012-01-02"), ("VIX", "2010-01-04"), ("IRX", "2010-01-04")):
+        days = index[index >= first]
+        if name == "FAKE":
+            close = 100 * np.exp(np.cumsum(rng.normal(0, 0.01, len(days))))
+        else:
+            close = 20.0
+        frame = pd.DataFrame({"Close": close}, index=pd.Index(days, name="Date"))
+        frame.to_csv(tmp_path / f"{name}.csv")
+    return DataSettings(
+        fetcher="csv",
+        csv_dir=str(tmp_path),
+        cache_dir=str(tmp_path / "cache"),
+        vix_ticker="VIX",
+        rf_ticker="IRX",
+        **overrides,
+    )
 
 
-def test_synthetic_matches_formula_exactly():
-    u = _index()
-    rf = 0.03
-    s = build_synthetic_3x(u, rf, leverage=3, expense_ratio=0.0095)
-    expected = 3 * u.pct_change() - 2 * rf / 252 - 0.0095 / 252
-    assert np.allclose(s.pct_change().dropna(), expected.dropna())
+def test_dataset_has_the_standard_columns(tmp_path):
+    data, info = build_dataset("FAKE", csv_settings(tmp_path))
+    assert list(data.columns) == ["price", "signal", "vix", "rf"]
+    assert info["signal"] == "FAKE"  # no SIGNAL_INDEX entry: the instrument is its own signal
+    assert (data["rf"] == 0.2).all()  # the IRX column holds 20 (percent) -> 0.20
 
 
-def test_synthetic_vs_known_fund_has_zero_tracking_error():
-    u = _index()
-    real = build_synthetic_3x(u, 0.02, 3, 0.0095, base=37.0)  # stands in for the real fund
-    synth = build_synthetic_3x(u, 0.02, 3, 0.0095)
-    te = tracking_error(synth, real)
-    assert te["annualized_te"] < 1e-9 and te["return_correlation"] > 0.999999
+def test_backtest_starts_when_the_instrument_started_to_exist(tmp_path):
+    data, _ = build_dataset("FAKE", csv_settings(tmp_path))
+    assert data.index[0] == pd.Timestamp("2012-01-02")  # not 2010, when VIX and IRX begin
+    assert data.index[-1] == TODAY
 
 
-def test_splice_is_continuous_and_uses_real_after_launch():
-    u = _index()
-    synth = build_synthetic_3x(u, 0.02)
-    real = synth.iloc[600:] * 0.5
-    out = splice_with_real(synth, real)
-    assert out.iloc[600:].equals(real.rename(out.name)) or np.allclose(out.iloc[600:], real)
-    r = out.pct_change()
-    assert np.isclose(r.iloc[600], synth.pct_change().iloc[600])  # no jump at the join
+def test_start_before_the_instrument_existed_does_not_invent_history(tmp_path):
+    data, _ = build_dataset("FAKE", csv_settings(tmp_path, start="2010-06-01"))
+    assert data.index[0] == pd.Timestamp("2012-01-02")
 
 
-@pytest.mark.network
-def test_synthetic_3x_vs_real_tqqq():
-    """Real data: synthetic ^NDX 3x must track TQQQ closely over the overlap."""
-    from data import build_dataset
+def test_start_and_end_limit_the_window_but_not_the_cache(tmp_path):
+    narrow = csv_settings(tmp_path, start="2013-03-01", end_date="2013-09-30")
+    data, _ = build_dataset("FAKE", narrow)
+    assert pd.Timestamp("2013-03-01") <= data.index[0] < pd.Timestamp("2013-03-08")
+    assert data.index[-1] <= pd.Timestamp("2013-09-30")
+    assert load_series("FAKE", narrow).index[0] == pd.Timestamp("2012-01-02")  # cache is complete
+    wide, _ = build_dataset("FAKE", csv_settings(tmp_path))
+    assert len(wide) > len(data)
 
-    try:
-        _, info = build_dataset("TQQQ")
-    except Exception as exc:
-        pytest.skip(f"no market data available: {exc}")
-    te = info["tracking"]
-    assert te is not None and te["n_days"] > 2000
-    assert te["return_correlation"] > 0.995
-    assert te["annualized_te"] < 0.05
-    assert abs(te["cagr_synth"] - te["cagr_real"]) < 0.05
+
+def test_default_window_is_five_years_back_from_today(tmp_path):
+    five, _ = build_dataset("FAKE", csv_settings(tmp_path, lookback_years=5), today=TODAY)
+    assert five.index[0] == pd.Timestamp("2012-01-02")  # 5 years back is before FAKE existed
+    one, _ = build_dataset("FAKE", csv_settings(tmp_path, lookback_years=1), today=TODAY)
+    assert pd.Timestamp("2013-12-31") <= one.index[0] < pd.Timestamp("2014-01-08")
+    assert one.index[-1] == TODAY
+
+
+def test_lookback_counts_back_from_an_explicit_end_and_start_wins(tmp_path):
+    only_end = csv_settings(tmp_path, end_date="2013-12-31", lookback_years=1)
+    data, _ = build_dataset("FAKE", only_end, today=TODAY)
+    assert pd.Timestamp("2012-12-31") <= data.index[0] < pd.Timestamp("2013-01-08")
+    assert data.index[-1] == pd.Timestamp("2013-12-31")
+    explicit = csv_settings(tmp_path, start="2012-06-01", lookback_years=1)
+    data, _ = build_dataset("FAKE", explicit, today=TODAY)
+    assert pd.Timestamp("2012-06-01") <= data.index[0] < pd.Timestamp("2012-06-08")
+
+
+def test_empty_window_is_an_error(tmp_path):
+    with pytest.raises(ValueError, match="no data between"):
+        build_dataset("FAKE", csv_settings(tmp_path, start="2030-01-01"))

@@ -27,14 +27,21 @@ uv run ruff check . && uv run ruff format .
 ## 2. Run it
 
 ```bash
-uv run python main.py                        # every strategy on TQQQ (~1 min)
+uv run python main.py                        # every strategy on TQQQ, last 5 years (short output)
+uv run python main.py --verbose              # also print the full tables for each strategy
 uv run python main.py --instrument UPRO      # any ticker
+uv run python main.py --start 2018-01-01 --end 2023-12-31   # choose the backtest window
+uv run python main.py --full-history         # from the instrument's first day instead of 5 years
 uv run python main.py --no-sensitivity       # skip the parameter grids (fast)
 uv run python main.py --refresh              # force a re-download of price data
 uv run python main.py --capital 50000        # starting capital (default 10,000)
 ```
 
-The first run downloads prices from Yahoo Finance and caches them as parquet files in `data_cache/`.
+By default the backtest covers the last 5 years (`--start` / `--end` choose another window, `--end` alone
+counts back 5 years from that date, `--full-history` uses everything). It can never begin before the
+instrument existed (TQQQ: 2010-02-11). The first run downloads the full price
+history from Yahoo Finance and caches it as parquet files in `data_cache/`, so different
+date windows reuse the same cache.
 Results are printed and written to `outputs/`: a `comparison.csv` across strategies, plus one folder
 per strategy:
 
@@ -47,7 +54,6 @@ per strategy:
 | `summary.csv` | Final value of $10k, CAGR, max drawdown, Sharpe/Sortino, time in market, trades |
 | `sensitivity.csv` | The strategy's own parameter grid: final value, worst trade, episodes detected |
 | `standalone.csv` | Each episode as its own $10k account (chained vs standalone) |
-| `tracking_error.csv` | Synthetic 3x vs real fund over their overlap |
 | `*.png` | Log equity curves, drawdown, VIX with entry/exit markers (episodes shaded) |
 
 ## 3. Strategies
@@ -78,11 +84,12 @@ main.py ──► data.py ──► (price, signal, vix, rf) ──► strategie
 ### Data (`data.py`)
 - Downloads adjusted closes for the instrument, its signal index, `^VIX` and a risk-free rate
   (`^IRX`), and caches each ticker to parquet. Settings are the `DataSettings` dataclass.
-- Before a leveraged fund existed, history is **synthetic**:
-  `L x daily index return - (L-1) x rf / 252 - expense ratio / 252`. It is spliced onto the real fund
-  at its launch, and `tracking_error()` reports how well the synthetic series matches the overlap.
+- Prices are real only: a backtest starts when the instrument started trading, and `--start` /
+  `--end` limit the window (default: the last 5 years). Nothing is ever simulated before the
+  instrument existed.
 - `build_dataset()` returns one standard frame (`price`, `signal`, `vix`, `rf`) that every strategy
-  consumes. Leveraged instruments are recipes in the `INSTRUMENTS` dict.
+  consumes. `signal` is the series strategies read their signals from: the index a leveraged fund
+  tracks (`SIGNAL_INDEX`, e.g. `^NDX` for TQQQ) or the instrument itself.
 
 ### Strategy interface (`strategy.py`)
 - A `Strategy` is a description, default `params`, a `run(data, params, ctx)` function and its own
@@ -115,14 +122,14 @@ main.py ──► data.py ──► (price, signal, vix, rf) ──► strategie
 | To add... | Do this |
 |---|---|
 | A strategy | Add a module or folder in `strategies/` exposing `STRATEGY = Strategy(...)`; it is picked up automatically |
-| An instrument | Add a line to `INSTRUMENTS` in `data.py` (any other ticker works as-is) |
+| An instrument | Nothing: any ticker works. To read signals from an index instead, add it to `SIGNAL_INDEX` in `data.py` |
 | A filter | `@register("filter", "name")` on a function in `signals.py` |
 | A data source | `@register("fetcher", "name")` on a function in `data.py` |
 
 ## 6. Assumptions and caveats
 
 - Taxes and slippage are excluded unless configured (`Context.cost_bps`).
-- Pre-launch leveraged data is synthetic. The index excludes dividends, so tracking is approximate.
+- Only real prices are used, so history is short (TQQQ has only 2010 onward) and covers few crashes.
 - Episodes and the benchmark anchors (first low, first signal) are identified with hindsight. The
   strategies themselves are causal.
 - The number of independent episodes is small for the slow strategies, so results are illustrative, not
