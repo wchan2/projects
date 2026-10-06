@@ -1,10 +1,10 @@
-"""Causal signal features: low tracking, stabilization, false starts and pluggable filters.
-Every value at date t depends only on data <= t."""
+"""Shared, causal signal building blocks (every value at date t uses data <= t): pluggable
+filters, episode windows, extreme tracking and RSI. Strategy-specific logic lives in strategies/."""
+
 import numpy as np
 import pandas as pd
 
-from episodes import label_episodes
-from registry import available, get, register
+from registry import get, register
 
 
 # ---- filters: fn(features, **params) -> boolean Series (NaN inputs evaluate to False) ----------
@@ -38,51 +38,72 @@ def apply_filters(feat: pd.DataFrame, filter_cfg: dict) -> pd.DataFrame:
     return out
 
 
-# ---- low tracking / stabilization --------------------------------------------------------------
-def track_lows(signal: pd.Series, episode_id: pd.Series, stable_days: int) -> pd.DataFrame:
-    """Running minimum close within each episode, trading days since it, stabilization flag
-    (no new low for stable_days) and the cumulative count of false starts (stabilization had
-    been confirmed, then a new low followed)."""
-    px, ep = signal.to_numpy(float), episode_id.to_numpy()
-    n = len(px)
-    low = np.full(n, np.nan)
-    low_i = np.full(n, -1)
+# ---- generic building blocks for indicator strategies (VIX, RSI, ...) ----------------------------
+def label_windows(arm: np.ndarray, disarm: np.ndarray) -> np.ndarray:
+    """Episode ids (1-based, -1 = none): an episode opens on the first `arm` day and closes on the
+    first later `disarm` day. Causal: the id at t depends only on arm / disarm up to t."""
+    ids = np.full(len(arm), -1, dtype=int)
+    current, next_id = -1, 1
+    for i in range(len(arm)):
+        if current < 0:
+            if arm[i]:
+                current, next_id = next_id, next_id + 1
+        elif disarm[i]:
+            current = -1
+        ids[i] = current
+    return ids
+
+
+def track_extreme(values: pd.Series, episode_id: pd.Series, mode: str) -> pd.DataFrame:
+    """Running max (mode="max") or min (mode="min") of `values` inside each episode, the date it
+    was set, and trading days since. A value must beat the previous extreme to be a new one."""
+    sign = 1.0 if mode == "max" else -1.0
+    vals, ep = values.to_numpy(float), episode_id.to_numpy()
+    n = len(vals)
+    ref = np.full(n, np.nan)
     since = np.full(n, -1)
-    false_starts = np.zeros(n, dtype=int)
-    cur, cmin, cpos, fs, prev_since = -1, np.inf, -1, 0, -1
+    ref_pos = np.full(n, -1)
+    current, best, best_i = -1, np.nan, -1
     for i in range(n):
-        e = ep[i]
-        if e < 0:
-            false_starts[i] = fs if cur >= 0 else 0
+        if ep[i] < 0:
             continue
-        if e != cur:
-            cur, cmin, cpos, fs, prev_since = e, px[i], i, 0, -1
-        elif px[i] < cmin:
-            if prev_since >= stable_days:
-                fs += 1                          # stabilization was confirmed, then a new low
-            cmin, cpos = px[i], i
-        low[i], low_i[i], since[i] = cmin, cpos, i - cpos
-        false_starts[i] = fs
-        prev_since = since[i]
-    dates = signal.index
-    out = pd.DataFrame({
-        "ep_low": low,
-        "ep_low_date": [dates[j] if j >= 0 else pd.NaT for j in low_i],
-        "days_since_low": since,
-        "false_starts": false_starts,
-    }, index=dates)
-    out["stable"] = (out["days_since_low"] >= stable_days) & (episode_id.to_numpy() >= 0)
-    out["trigger"] = out["stable"] & ~out["stable"].shift(1, fill_value=False)
-    return out
+        if ep[i] != current:
+            current, best, best_i = ep[i], vals[i], i
+        elif sign * vals[i] > sign * best:
+            best, best_i = vals[i], i
+        ref[i], ref_pos[i], since[i] = best, best_i, i - best_i
+    dates = values.index
+    return pd.DataFrame(
+        {
+            "ref_value": ref,
+            "ref_date": [dates[j] if j >= 0 else pd.NaT for j in ref_pos],
+            "days_since_ref": since,
+        },
+        index=dates,
+    )
 
 
-def build_features(data: pd.DataFrame, episodes_cfg: dict, strategy_cfg: dict) -> pd.DataFrame:
-    """data columns: price, signal, vix, rf. Returns data + episode labels, lows, triggers, filters."""
-    lab = label_episodes(data["signal"], episodes_cfg["crash_threshold"],
-                         episodes_cfg["merge_gap_days"], episodes_cfg.get("override") or None)
-    trk = track_lows(data["signal"], lab["episode_id"], strategy_cfg["stable_days"])
-    feat = data.join(lab).join(trk)
-    return feat.join(apply_filters(feat, strategy_cfg.get("filters", {})))
+def rising_edge(condition: pd.Series) -> pd.Series:
+    """True on the first day a condition becomes true (and again after it turns false)."""
+    return condition & ~condition.shift(1, fill_value=False)
 
 
-__all__ = ["build_features", "apply_filters", "track_lows", "available"]
+def episode_summary(feat: pd.DataFrame, ref_name: str) -> pd.DataFrame:
+    """One row per episode: start, end (recovery_date; NaT while open), the reference extreme
+    (named `ref_name`), and how many triggers fired."""
+    rows = []
+    in_ep = feat[feat["episode_id"] >= 0]
+    n = len(feat)
+    for eid, grp in in_ep.groupby("episode_id"):
+        last_pos = feat.index.get_loc(grp.index[-1])
+        rows.append(
+            {
+                "episode_id": int(eid),
+                "start_date": grp.index[0],
+                "recovery_date": feat.index[last_pos + 1] if last_pos + 1 < n else pd.NaT,
+                f"{ref_name}_date": grp["ref_date"].iloc[-1],
+                ref_name: grp["ref_value"].iloc[-1],
+                "triggers": int(grp["trigger"].sum()),
+            }
+        )
+    return pd.DataFrame(rows)

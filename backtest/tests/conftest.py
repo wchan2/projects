@@ -2,10 +2,16 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from strategies import stabilized_crash_low
+from strategy import Context
+
+PARAMS = stabilized_crash_low.PARAMS
+CTX = Context()
+
 
 def piecewise(points, start="2000-01-03"):
     """Business-day series interpolating (n_days, level) waypoints, e.g. [(0,100),(250,150)]."""
-    xs, ys = zip(*points)
+    xs, ys = zip(*points, strict=True)
     n = xs[-1] + 1
     idx = pd.bdate_range(start, periods=n)
     return pd.Series(np.interp(np.arange(n), xs, ys), idx, name="IDX")
@@ -15,8 +21,19 @@ def piecewise(points, start="2000-01-03"):
 def known_crashes():
     """Rise to 100; -40% crash and full recovery; a -19% dip (below threshold); rally;
     -30% crash and recovery. Plateaus keep the extrema exact."""
-    return piecewise([(0, 50), (250, 100), (350, 60), (650, 105),
-                      (700, 85), (800, 120), (880, 84), (1100, 125), (1200, 130)])
+    return piecewise(
+        [
+            (0, 50),
+            (250, 100),
+            (350, 60),
+            (650, 105),
+            (700, 85),
+            (800, 120),
+            (880, 84),
+            (1100, 125),
+            (1200, 130),
+        ]
+    )
 
 
 @pytest.fixture

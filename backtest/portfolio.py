@@ -1,4 +1,5 @@
 """Cash / position ledger and the event log (including skipped signals)."""
+
 from dataclasses import dataclass, field
 
 import pandas as pd

@@ -1,5 +1,3 @@
-import os
-
 import numpy as np
 import pandas as pd
 import pytest
@@ -23,7 +21,7 @@ def test_synthetic_matches_formula_exactly():
 
 def test_synthetic_vs_known_fund_has_zero_tracking_error():
     u = _index()
-    real = build_synthetic_3x(u, 0.02, 3, 0.0095, base=37.0)   # stands in for the real fund
+    real = build_synthetic_3x(u, 0.02, 3, 0.0095, base=37.0)  # stands in for the real fund
     synth = build_synthetic_3x(u, 0.02, 3, 0.0095)
     te = tracking_error(synth, real)
     assert te["annualized_te"] < 1e-9 and te["return_correlation"] > 0.999999
@@ -36,17 +34,16 @@ def test_splice_is_continuous_and_uses_real_after_launch():
     out = splice_with_real(synth, real)
     assert out.iloc[600:].equals(real.rename(out.name)) or np.allclose(out.iloc[600:], real)
     r = out.pct_change()
-    assert np.isclose(r.iloc[600], synth.pct_change().iloc[600])   # no jump at the join
+    assert np.isclose(r.iloc[600], synth.pct_change().iloc[600])  # no jump at the join
 
 
 @pytest.mark.network
 def test_synthetic_3x_vs_real_tqqq():
     """Real data: synthetic ^NDX 3x must track TQQQ closely over the overlap."""
-    import yaml
     from data import build_dataset
-    cfg = yaml.safe_load(open("config.yaml"))
+
     try:
-        _, info = build_dataset(cfg, "TQQQ")
+        _, info = build_dataset("TQQQ")
     except Exception as exc:
         pytest.skip(f"no market data available: {exc}")
     te = info["tracking"]

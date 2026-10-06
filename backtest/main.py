@@ -1,102 +1,184 @@
-"""Orchestrates everything from config.yaml:  python main.py [--instrument UPRO] [--refresh]"""
+"""Backtest every strategy in strategies/ on one instrument.
+
+    uv run python main.py                    # TQQQ
+    uv run python main.py --instrument UPRO  # any ticker
+
+Data settings live in data.py (DataSettings / INSTRUMENTS), strategy parameters and sensitivity
+grids live with each strategy in strategies/.
+"""
+
 import argparse
 from pathlib import Path
 
 import pandas as pd
-import yaml
 
 from benchmarks import build_benchmarks, standalone_summary
 from data import build_dataset
-from metrics import summarize, window
-from report import (ASSUMPTIONS, plot_drawdown, plot_equity, plot_vix, save_csv, write_report)
+from metrics import performance, window
+from report import (
+    ASSUMPTIONS,
+    plot_drawdown,
+    plot_equity,
+    plot_vix,
+    save_csv,
+    write_report,
+)
 from sensitivity import run_grid
-from strategy import run_strategy
+from strategies import discover
+from strategy import Context, Strategy
+
+EMPTY_EPISODES = pd.DataFrame(columns=["start_date", "recovery_date"])
 
 
-def load_config(path: str) -> dict:
-    return yaml.safe_load(open(path))
-
-
-def run(cfg: dict, instrument: str | None = None, refresh: bool = False,
-        sensitivity: bool | None = None) -> dict:
-    inst = instrument or cfg["run"]["instrument"]
-    cap, td = cfg["run"]["initial_capital"], cfg["synthetic"]["trading_days"]
-    out = Path(cfg["output_dir"])
-    data, info = build_dataset(cfg, inst, refresh)
-    res = run_strategy(data, cfg["strategy"], cfg["episodes"], cap, td)
-    start = res.anchors.get("first_signal")
+def backtest_strategy(
+    name: str,
+    strategy: Strategy,
+    data: pd.DataFrame,
+    info: dict,
+    ctx: Context,
+    instrument: str,
+    out_dir: Path,
+    run_sensitivity: bool,
+) -> pd.DataFrame | None:
+    """Run one strategy, write its tables / charts / report, return its summary table."""
+    capital = ctx.initial_capital
+    res = strategy.run(data, strategy.params, ctx)
+    start = res.eval_start
     if start is None:
-        raise SystemExit(f"{inst}: no stabilization signal was ever confirmed; nothing to backtest")
-    holds = build_benchmarks(data["price"], res.anchors, cap)
+        print(f"\n[{name}] no signal was ever confirmed on {instrument}; skipped")
+        return None
 
-    rows = {f"strategy [{inst}]": summarize(res.equity, res.weights, res.trades, data["rf"], start, cap, td)}
-    for name, eq in holds.items():
-        rows[f"{name} [{inst}]"] = summarize(eq, None, None, data["rf"], None, cap, td)
-    curves = {f"strategy [{inst}]": window(res.equity, start, cap),
-              **{k: v for k, v in holds.items() if k != "hold_first_low"} | {"hold_first_low": holds["hold_first_low"]}}
-    for other in cfg["run"].get("comparison_instruments", []):
-        d2, _ = build_dataset(cfg, other, refresh)
-        r2 = run_strategy(d2, cfg["strategy"], cfg["episodes"], cap, td)
-        rows[f"strategy [{other}]"] = summarize(r2.equity, r2.weights, r2.trades, d2["rf"], start, cap, td)
-        rows[f"hold_first_signal [{other}]"] = summarize(
-            build_benchmarks(d2["price"], {"first_signal": start}, cap)["hold_first_signal"],
-            None, None, d2["rf"], None, cap, td)
-        curves[f"strategy [{other}]"] = window(r2.equity, start, cap)
+    holds = build_benchmarks(data, res.anchors, ctx)  # $10k bought when the strategy entered
+    rows = {f"{name} [{instrument}]": performance(res, data, capital, ctx.trading_days)}
+    for hold_name, held in holds.items():
+        rows[f"{hold_name} [{instrument}]"] = performance(held, data, capital, ctx.trading_days)
     summary = pd.DataFrame(rows).T.rename_axis("approach")
+    episodes = res.episodes if res.episodes is not None else EMPTY_EPISODES
 
-    sections, tables = {}, {"episodes": res.episodes, "trades": res.trades,
-                            "events": res.events, "summary": summary}
-    sections["Episodes (auto-detected)"] = res.episodes
-    sections["Trades"] = res.trades
-    sections["Summary"] = summary.reset_index()
-    sections["Skipped signals / events"] = res.events
+    tables = {
+        "episodes": episodes,
+        "trades": res.trades,
+        "events": res.events,
+        "summary": summary,
+    }
+    sections = {
+        "Strategy": strategy.description,
+        "Episodes (auto-detected)": episodes,
+        "Trades": res.trades,
+        "Summary": summary.reset_index(),
+        "Skipped signals / events": res.events,
+    }
     if info["tracking"]:
-        te = pd.DataFrame([info["tracking"]])
-        tables["tracking_error"] = te
-        sections[f"Synthetic vs real {inst} (overlap)"] = te
-    if cfg["run"].get("standalone_comparison"):
-        sa = run_strategy(data, {**cfg["strategy"], "chained": False}, cfg["episodes"], cap, td)
-        ss = standalone_summary(sa.trades, cap)
-        tables["standalone"] = ss
-        sections["Chained vs standalone ($10k per episode)"] = ss
-    if (cfg["sensitivity"]["enabled"] if sensitivity is None else sensitivity):
-        grid = run_grid(data, cfg["strategy"], cfg["episodes"], cfg["sensitivity"]["grid"], cap, td)
+        tracking = pd.DataFrame([info["tracking"]])
+        tables["tracking_error"] = tracking
+        sections[f"Synthetic vs real {instrument} (overlap)"] = tracking
+    if "chained" in strategy.params:
+        standalone = strategy.run(data, {**strategy.params, "chained": False}, ctx)
+        table = standalone_summary(standalone.trades, capital)
+        tables["standalone"] = table
+        sections["Chained vs standalone ($10k per episode)"] = table
+    if run_sensitivity and strategy.sensitivity_grid:
+        grid = run_grid(strategy, data, ctx)
         tables["sensitivity"] = grid
         sections["Sensitivity grid"] = grid
         sections["Sensitivity summary"] = (
-            f"{len(grid)} cells; {(grid.final_value > cap).mean():.0%} ended above ${cap:,.0f}; "
-            f"{grid.beats_hold.mean():.0%} beat buy-and-hold from the same first signal; "
-            f"worst single trade across cells: {grid.worst_trade.min():.1%}.")
+            f"{len(grid)} cells; {(grid.final_value > capital).mean():.0%} ended above "
+            f"${capital:,.0f}; {grid.beats_hold.mean():.0%} beat buy-and-hold from the same "
+            f"start; worst single trade across cells: {grid.worst_trade.min():.1%}."
+        )
 
-    for name, df in tables.items():
-        save_csv(out, name, df)
-    plot_equity(out, curves, res.episodes, f"{inst}: strategy vs buy-and-hold (from {start.date()})")
-    plot_drawdown(out, {k: curves[k] for k in list(curves)[:2]}, res.episodes)
-    plot_vix(out, data["vix"], res.trades, res.episodes, start=data.index[0])
-    write_report(out, f"Backtest report: {inst}", sections)
-    print_console(res, summary, info, sections)
-    return {"result": res, "summary": summary, "tables": tables}
+    for table_name, df in tables.items():
+        save_csv(out_dir, table_name, df)
+    curves = {f"{name} [{instrument}]": window(res.equity, start, capital)}
+    for hold_name, held in holds.items():
+        curves[hold_name] = window(held.equity, held.eval_start, capital)
+    plot_equity(out_dir, curves, episodes, f"{instrument}: {name} vs buy-and-hold")
+    plot_drawdown(out_dir, {k: curves[k] for k in list(curves)[:2]}, episodes)
+    plot_vix(out_dir, data["vix"], res.trades, episodes, start=data.index[0])
+    write_report(out_dir, f"Backtest report: {name} on {instrument}", sections)
+    print_console(name, strategy, episodes, res.trades, res.events, summary, sections)
+    return summary
 
 
-def print_console(res, summary, info, sections) -> None:
-    pd.set_option("display.width", 220, "display.max_columns", 30, "display.float_format", "{:,.3f}".format)
-    print("\n== Episodes (auto-detected) ==\n", res.episodes.to_string(index=False))
-    print("\n== Trades ==\n", res.trades.to_string(index=False) if len(res.trades) else "(none)")
-    print("\n== Summary ==\n", summary[["final_value", "cagr", "max_drawdown", "sharpe", "sortino",
-                                       "time_in_market", "n_trades"]].to_string())
-    for k in ("Chained vs standalone ($10k per episode)", "Sensitivity summary"):
-        if k in sections:
-            print(f"\n== {k} ==\n", sections[k] if isinstance(sections[k], str) else sections[k].to_string(index=False))
-    sk = res.events[res.events.event.isin(["skipped", "tranche_skipped", "no_entry"])]
-    print("\n== Skipped signals ==\n", sk.to_string(index=False) if len(sk) else "(none)")
+def print_console(
+    name: str,
+    strategy: Strategy,
+    episodes: pd.DataFrame,
+    trades: pd.DataFrame,
+    events: pd.DataFrame,
+    summary: pd.DataFrame,
+    sections: dict,
+) -> None:
+    pd.set_option("display.width", 220, "display.max_columns", 30)
+    pd.set_option("display.float_format", "{:,.3f}".format)
+    print(f"\n{'=' * 100}\n{name}: {strategy.description}\n{'=' * 100}")
+    print("\n== Episodes ==\n", episodes.to_string(index=False) if len(episodes) else "(none)")
+    print("\n== Trades ==\n", trades.to_string(index=False) if len(trades) else "(none)")
+    columns = [
+        "final_value",
+        "cagr",
+        "max_drawdown",
+        "sharpe",
+        "sortino",
+        "time_in_market",
+        "n_trades",
+    ]
+    print("\n== Summary ==\n", summary[columns].to_string())
+    for key in ("Chained vs standalone ($10k per episode)", "Sensitivity summary"):
+        if key in sections:
+            body = sections[key]
+            print(
+                f"\n== {key} ==\n", body if isinstance(body, str) else body.to_string(index=False)
+            )
+    skipped = events[events.event.isin(["skipped", "tranche_skipped", "no_entry"])]
+    print("\n== Skipped signals ==\n", skipped.to_string(index=False) if len(skipped) else "(none)")
+
+
+def main(
+    instrument: str = "TQQQ",
+    capital: float = 10_000,
+    refresh: bool = False,
+    run_sensitivity: bool = True,
+    output_dir: str = "outputs",
+) -> pd.DataFrame:
+    ctx = Context(initial_capital=capital)
+    data, info = build_dataset(instrument, refresh=refresh)
+    summaries = {}
+    for name, strategy in discover().items():
+        summary = backtest_strategy(
+            name,
+            strategy,
+            data,
+            info,
+            ctx,
+            instrument,
+            Path(output_dir) / name,
+            run_sensitivity,
+        )
+        if summary is not None:
+            summaries[name] = summary.iloc[0]  # the strategy's own row (holds are per-strategy)
+
+    comparison = pd.DataFrame(summaries).T.rename_axis("strategy")
+    if len(comparison):
+        save_csv(output_dir, "comparison", comparison)
+        print(f"\n{'=' * 100}\nAll strategies on {instrument}\n{'=' * 100}")
+        print(comparison[["start", "final_value", "cagr", "max_drawdown", "sharpe", "n_trades"]])
     print("\nAssumptions:\n" + "\n".join(f" - {a}" for a in ASSUMPTIONS))
+    return comparison
 
 
 if __name__ == "__main__":
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--config", default="config.yaml")
-    ap.add_argument("--instrument")
-    ap.add_argument("--refresh", action="store_true")
-    ap.add_argument("--no-sensitivity", action="store_true")
-    a = ap.parse_args()
-    run(load_config(a.config), a.instrument, a.refresh, False if a.no_sensitivity else None)
+    parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    parser.add_argument("--instrument", default="TQQQ", help="any ticker (default: TQQQ)")
+    parser.add_argument("--capital", type=float, default=10_000)
+    parser.add_argument("--refresh", action="store_true", help="re-download price data")
+    parser.add_argument("--no-sensitivity", action="store_true", help="skip the parameter grids")
+    parser.add_argument("--output-dir", default="outputs")
+    args = parser.parse_args()
+    main(
+        args.instrument,
+        args.capital,
+        args.refresh,
+        not args.no_sensitivity,
+        args.output_dir,
+    )

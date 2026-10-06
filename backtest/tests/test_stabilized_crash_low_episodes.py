@@ -1,13 +1,13 @@
 import numpy as np
 import pytest
 
-from episodes import detect_crash_episodes, label_episodes
+from strategies.stabilized_crash_low.episodes import detect_crash_episodes, label_episodes
 from tests.conftest import piecewise
 
 
 def test_detects_known_drawdowns(known_crashes):
     ep = detect_crash_episodes(known_crashes, crash_threshold=0.25, merge_gap_days=60)
-    assert len(ep) == 2                                   # the -19% dip is ignored
+    assert len(ep) == 2  # the -19% dip is ignored
     a, b = ep.iloc[0], ep.iloc[1]
     assert a.trough_depth == pytest.approx(-0.40, abs=1e-6)
     assert b.trough_depth == pytest.approx(-0.30, abs=1e-6)
@@ -33,7 +33,7 @@ def test_open_episode_closed_at_end_date():
 def test_merge_gap():
     # two -40% crashes; recovery to a new high between them lasts ~10 days
     s = piecewise([(0, 100), (50, 60), (100, 101), (110, 101), (130, 60), (250, 105)])
-    assert len(detect_crash_episodes(s, merge_gap_days=60)) == 1     # < 60 days apart: merged
+    assert len(detect_crash_episodes(s, merge_gap_days=60)) == 1  # < 60 days apart: merged
     assert len(detect_crash_episodes(s, merge_gap_days=5)) == 2
 
 

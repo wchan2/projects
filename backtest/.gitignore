@@ -3,3 +3,6 @@ data_cache/
 outputs/
 __pycache__/
 .pytest_cache/
+.idea/
+*.iml
+venv/

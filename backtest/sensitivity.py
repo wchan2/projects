@@ -1,13 +1,14 @@
-"""Parameter grid runner: CRASH_THRESHOLD x STABLE_DAYS x HOLD_YEARS x VIX_MAX (any keys)."""
+"""Parameter grid runner. The grid belongs to the strategy (`Strategy.sensitivity_grid`)."""
+
 import copy
 import itertools
 
 import numpy as np
 import pandas as pd
 
-from benchmarks import hold_equity
+from benchmarks import hold_from
 from metrics import window
-from strategy import run_strategy
+from strategy import Context, Strategy
 
 
 def set_path(d: dict, dotted: str, value) -> None:
@@ -17,26 +18,43 @@ def set_path(d: dict, dotted: str, value) -> None:
     d[last] = value
 
 
-def run_grid(data: pd.DataFrame, strategy_cfg: dict, episodes_cfg: dict, grid: dict,
-             capital: float = 10_000, trading_days: int = 252) -> pd.DataFrame:
-    """One row per grid cell. Value columns use the window from each cell's first signal, so
-    cells are comparable with the buy-and-hold from that same date."""
-    keys = list(grid)
-    rows = []
+def run_grid(
+    strategy: Strategy,
+    data: pd.DataFrame,
+    ctx: Context,
+    params: dict | None = None,
+    grid: dict | None = None,
+) -> pd.DataFrame:
+    """One row per grid cell (default grid and params: the strategy's own). Value columns are
+    measured from each cell's own eval_start, so they compare with buy-and-hold from that date."""
+    params = strategy.params if params is None else params
+    grid = strategy.sensitivity_grid if grid is None else grid
+    capital = ctx.initial_capital
+    keys, rows = list(grid), []
     for combo in itertools.product(*grid.values()):
-        st, ep = copy.deepcopy(strategy_cfg), copy.deepcopy(episodes_cfg)
-        for k, v in zip(keys, combo):
-            set_path(ep if k.split(".")[0] in ep else st, k, v)
-        r = run_strategy(data, {**st, "chained": True}, ep, capital, trading_days)
-        start = r.anchors.get("first_signal")
-        if start is None:
+        p = copy.deepcopy(params)
+        for k, v in zip(keys, combo, strict=True):
+            set_path(p, k, v)
+        if "chained" in p:
+            p["chained"] = True  # the grid needs a single equity curve
+        r = strategy.run(data, p, ctx)
+        if r.eval_start is None or r.equity is None:
             final = hold = capital
         else:
-            final = float(window(r.equity, start, capital).iloc[-1])
-            hold = float(hold_equity(data["price"], start, capital).iloc[-1])
-        rows.append({**dict(zip(keys, combo)), "n_episodes": len(r.episodes),
-                     "n_trades": len(r.trades), "final_value": final, "hold_final": hold,
-                     "worst_trade": float(r.trades["return"].min()) if len(r.trades) else np.nan})
+            final = float(window(r.equity, r.eval_start, capital).iloc[-1])
+            held = hold_from(data, r.eval_start, ctx)
+            hold = float(window(held.equity, held.eval_start, capital).iloc[-1])
+        has_trades = r.trades is not None and len(r.trades)
+        rows.append(
+            {
+                **dict(zip(keys, combo, strict=True)),
+                "n_episodes": len(r.episodes) if r.episodes is not None else np.nan,
+                "n_trades": len(r.trades) if r.trades is not None else 0,
+                "final_value": final,
+                "hold_final": hold,
+                "worst_trade": float(r.trades["return"].min()) if has_trades else np.nan,
+            }
+        )
     out = pd.DataFrame(rows)
     out["beats_hold"] = out["final_value"] > out["hold_final"]
     return out
