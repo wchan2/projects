@@ -51,7 +51,7 @@ def test_standalone_and_grid(noisy_market):
     grid = {
         "crash_threshold": [0.2, 0.3],
         "hold_years": [1, 2],
-        "filters.vix_max.max": [30],
+        "vix_below.limit": [30],
     }
     g = run_grid(STRATEGY, noisy_market, CTX, grid=grid)
     assert len(g) == 4 and {"final_value", "worst_trade", "n_episodes"} <= set(g.columns)
@@ -62,4 +62,4 @@ def test_standalone_and_grid(noisy_market):
 
 def test_grid_comes_from_the_strategy(noisy_market):
     grid = STRATEGY.sensitivity_grid
-    assert {"crash_threshold", "stable_days", "hold_years", "filters.vix_max.max"} <= set(grid)
+    assert {"crash_threshold", "stable_days", "hold_years", "vix_below.limit"} <= set(grid)

@@ -16,6 +16,7 @@ import numpy as np
 import pandas as pd
 
 from portfolio import EventLog, Portfolio
+from signals import Signal, rising_edge
 
 
 @dataclass(frozen=True)
@@ -120,6 +121,96 @@ def scale_in_anchors(feat: pd.DataFrame, trades: pd.DataFrame) -> dict:
     if len(trades):
         anchors["first_entry"] = trades["entry_start"].min()
     return anchors
+
+
+# ---- build a strategy from an entry signal ------------------------------------------------------
+SCALE_IN_DEFAULTS = {
+    "buy_weeks": 8,  # equal weekly tranches
+    "tranche_step_days": 5,
+    "hold_years": 1,  # sold this long after the first tranche
+    "chained": True,  # proceeds redeployed at the next signal; False = standalone $ per episode
+    "cooldown_days": 21,  # entry-signal days closer than this belong to the same episode
+}
+
+
+def scale_in_strategy(
+    description: str,
+    entry: Signal,
+    sensitivity_grid: dict | None = None,
+    tranche_filter: Signal | None = None,
+    signal_params: dict | None = None,
+    **scale_in_params,
+) -> Strategy:
+    """A strategy that buys when `entry` turns true: scale in over `buy_weeks` tranches (each
+    must pass `tranche_filter`, if given), hold `hold_years`, sell. `signal_params` overrides the
+    defaults of individual signals, e.g. {"deep_dip": {"lookback_days": 252}}. Any other keyword
+    overrides SCALE_IN_DEFAULTS."""
+    params = {**SCALE_IN_DEFAULTS, **scale_in_params}
+    for sig in (entry, tranche_filter):
+        if sig is not None:
+            params.update(sig.all_defaults())
+    for name, overrides in (signal_params or {}).items():
+        params[name] = {**params[name], **overrides}
+
+    def run(data: pd.DataFrame, params: dict, ctx: Context) -> StrategyResult:
+        active = entry(data, params)
+        feat = data.assign(
+            episode_id=cluster_ids(active, params["cooldown_days"]),
+            trigger=rising_edge(active),
+            ref_value=data["signal"],
+            ref_date=data.index,
+        )
+        if tranche_filter is None:
+            feat["filters_pass"], feat["first_fail"] = True, ""
+        else:
+            feat["filters_pass"] = tranche_filter(data, params)
+            feat["first_fail"] = tranche_filter.first_failing(data, params)
+        equity, weights, trades, events = scale_in(feat, params, ctx)
+        trades = trades.rename(columns={"ref_value": "signal_level"})
+        trades = trades.drop(columns="ref_date", errors="ignore")
+        anchors = scale_in_anchors(feat, trades)
+        return StrategyResult(
+            equity,
+            weights,
+            trades,
+            events,
+            signal_episodes(feat),
+            anchors,
+            eval_start=anchors.get("first_signal"),
+        )
+
+    return Strategy(description, run, params, sensitivity_grid or {})
+
+
+def cluster_ids(active: pd.Series, cooldown_days: int) -> pd.Series:
+    """Episode id (1-based) on each day `active` is true, -1 elsewhere. Active days fewer than
+    `cooldown_days` trading days after the previous one belong to the same episode."""
+    flags = active.to_numpy()
+    ids = np.full(len(flags), -1, dtype=int)
+    current, last_active = 0, None
+    for i in range(len(flags)):
+        if flags[i]:
+            if last_active is None or i - last_active > cooldown_days:
+                current += 1
+            ids[i], last_active = current, i
+    return pd.Series(ids, index=active.index)
+
+
+def signal_episodes(feat: pd.DataFrame) -> pd.DataFrame:
+    """One row per entry-signal episode: when it started and ended, and how often it fired."""
+    columns = ["episode_id", "start_date", "recovery_date", "active_days", "triggers"]
+    rows = []
+    for episode, days in feat[feat["episode_id"] >= 0].groupby("episode_id"):
+        rows.append(
+            {
+                "episode_id": int(episode),
+                "start_date": days.index[0],
+                "recovery_date": days.index[-1],  # last day the signal was on
+                "active_days": len(days),
+                "triggers": int(days["trigger"].sum()),
+            }
+        )
+    return pd.DataFrame(rows, columns=columns)
 
 
 def _simulate(

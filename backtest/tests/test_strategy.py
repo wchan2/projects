@@ -5,7 +5,7 @@ import pandas as pd
 from strategies.stabilized_crash_low import STRATEGY
 from tests.conftest import CTX, PARAMS, piecewise
 
-NO_FILTERS = {**PARAMS, "filters": {}}
+NO_FILTERS = {**PARAMS, "filters_enabled": False}
 
 
 def run(data, params=PARAMS, ctx=CTX):

@@ -2,16 +2,20 @@
 
 The signal index falls >= `crash_threshold` below its all-time high (an episode). Once it has
 made no new low for `stable_days` trading days, scale in over `buy_weeks` weekly tranches
-(each checked against the filters), hold `hold_years` from the first tranche, then sell.
+(each checked against the tranche filter), hold `hold_years` from the first tranche, then sell.
 Proceeds are redeployed at the next qualifying episode (`chained`).
 """
 
 import pandas as pd
 
+from signals import all_of, deep_dip, vix_below
 from strategy import Context, Strategy, StrategyResult, scale_in, scale_in_anchors
 
 from .episodes import detect_crash_episodes
 from .signals import build_features
+
+# swap in other signals here, e.g. all_of(vix_below, above_moving_average)
+TRANCHE_FILTER = all_of(vix_below, deep_dip)
 
 PARAMS = {
     # episode detection (periods are auto-selected from the signal index)
@@ -24,18 +28,16 @@ PARAMS = {
     "tranche_step_days": 5,
     "hold_years": 2,  # HOLD_YEARS after the first tranche
     "chained": True,  # proceeds redeployed at the next qualifying episode
-    "filters": {  # registered in signals.py
-        "vix_max": {"enabled": True, "max": 30},
-        "above_ma": {"enabled": False, "window": 200},
-        "min_depth": {"enabled": True, "min_depth": 0.15},
-    },
+    # each tranche is only bought if VIX is calm and the index is still well below its high
+    "filters_enabled": True,
+    **TRANCHE_FILTER.all_defaults(),  # {"vix_below": {"limit": 30}, "deep_dip": {...}}
 }
 
 SENSITIVITY_GRID = {
     "crash_threshold": [0.20, 0.25, 0.30],
     "stable_days": [42, 63, 84],
     "hold_years": [2, 3],
-    "filters.vix_max.max": [25, 30, 40],
+    "vix_below.limit": [25, 30, 40],
 }
 
 
@@ -43,6 +45,11 @@ def run(data: pd.DataFrame, params: dict, ctx: Context) -> StrategyResult:
     """data: price, signal, vix, risk_free."""
     feat = build_features(data, params)
     feat["ref_value"], feat["ref_date"] = feat["ep_low"], feat["ep_low_date"]
+    if params["filters_enabled"]:
+        feat["filters_pass"] = TRANCHE_FILTER(data, params)
+        feat["first_fail"] = TRANCHE_FILTER.first_failing(data, params)
+    else:
+        feat["filters_pass"], feat["first_fail"] = True, ""
     table = detect_crash_episodes(
         data["signal"],
         data["vix"],

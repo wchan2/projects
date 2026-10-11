@@ -1,20 +1,10 @@
-import numpy as np
 import pandas as pd
 
 from strategies.stabilized_crash_low.episodes import label_episodes
 from strategies.stabilized_crash_low.signals import build_features, track_lows
 from tests.conftest import piecewise
 
-P = {
-    "crash_threshold": 0.25,
-    "merge_gap_days": 60,
-    "stable_days": 63,
-    "filters": {
-        "vix_max": {"enabled": True, "max": 30},
-        "above_ma": {"enabled": True, "window": 200},
-        "min_depth": {"enabled": False},
-    },
-}
+P = {"crash_threshold": 0.25, "merge_gap_days": 60, "stable_days": 63}
 
 
 def test_stabilization_and_false_start():
@@ -28,15 +18,6 @@ def test_stabilization_and_false_start():
     first = t.index[t["trigger"]][0]
     assert t.loc[first, "days_since_low"] == 63
     assert t.loc[first, "ep_low"] == s.iloc[50]
-
-
-def test_filters_toggle_and_fail_closed(noisy_market):
-    f = build_features(noisy_market, P)
-    assert "f_vix_max" in f and "f_above_ma" in f and "f_min_depth" not in f
-    nm = noisy_market.copy()
-    nm["vix"] = np.nan
-    assert not build_features(nm, P)["filters_pass"].any()  # missing VIX => fail
-    assert (f.loc[~f.filters_pass, "first_fail"] != "").all()
 
 
 def test_features_no_lookahead(noisy_market):

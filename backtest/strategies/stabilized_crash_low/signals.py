@@ -4,8 +4,6 @@ triggers. Every value at date t depends only on data <= t."""
 import numpy as np
 import pandas as pd
 
-from signals import apply_filters
-
 from .episodes import label_episodes
 
 
@@ -50,8 +48,7 @@ def track_lows(signal: pd.Series, episode_id: pd.Series, stable_days: int) -> pd
 
 
 def build_features(data: pd.DataFrame, params: dict) -> pd.DataFrame:
-    """data columns: price, signal, vix, risk_free. Returns data + episode labels, lows, triggers
-    and filters."""
+    """data: price, signal, vix, risk_free. Returns data + episode labels, lows and triggers."""
     lab = label_episodes(
         data["signal"],
         params["crash_threshold"],
@@ -60,4 +57,4 @@ def build_features(data: pd.DataFrame, params: dict) -> pd.DataFrame:
     )
     trk = track_lows(data["signal"], lab["episode_id"], params["stable_days"])
     feat = data.join(lab).join(trk)
-    return feat.join(apply_filters(feat, params.get("filters", {})))
+    return feat
