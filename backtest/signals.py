@@ -19,6 +19,8 @@ from operator import and_, or_
 import numpy as np
 import pandas as pd
 
+from indicators import drawdown_from_high, moving_average, rsi
+
 
 @dataclass(frozen=True)
 class Signal:
@@ -103,20 +105,14 @@ def vix_below(data: pd.DataFrame, limit: float) -> pd.Series:
 @signal("above_moving_average", window=200)
 def above_moving_average(data: pd.DataFrame, window: int) -> pd.Series:
     """The signal series closes above its `window`-day moving average."""
-    return data["signal"] > data["signal"].rolling(window).mean()
+    return data["signal"] > moving_average(data["signal"], window)
 
 
 @signal("deep_dip", min_depth=0.15, lookback_days=None)
 def deep_dip(data: pd.DataFrame, min_depth: float, lookback_days: int | None) -> pd.Series:
     """The signal series is at least `min_depth` (fraction) below its high: the running high of
     the data, or the last `lookback_days` days if given."""
-    series = data["signal"]
-    high = (
-        series.cummax()
-        if lookback_days is None
-        else series.rolling(lookback_days, min_periods=1).max()
-    )
-    return series / high - 1 <= -min_depth
+    return drawdown_from_high(data["signal"], lookback_days) <= -min_depth
 
 
 @signal(
@@ -175,14 +171,6 @@ def rsi_bounce(
 
 
 # ---- building blocks (causal helpers) -----------------------------------------------------------
-def rsi(close: pd.Series, period: int = 14) -> pd.Series:
-    """Wilder's RSI."""
-    change = close.diff()
-    gains = change.clip(lower=0).ewm(alpha=1 / period, adjust=False, min_periods=period).mean()
-    losses = (-change.clip(upper=0)).ewm(alpha=1 / period, adjust=False, min_periods=period).mean()
-    return 100 - 100 / (1 + gains / losses)
-
-
 def label_windows(arm: np.ndarray, disarm: np.ndarray) -> np.ndarray:
     """Episode ids (1-based, -1 = none): an episode opens on the first `arm` day and closes on the
     first later `disarm` day. Causal: the id at t depends only on arm / disarm up to t."""
