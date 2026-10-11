@@ -9,11 +9,15 @@ from signals import (
     above_moving_average,
     all_of,
     any_of,
+    crash_active,
     deep_dip,
     label_windows,
     not_,
     recently,
     rsi_bounce,
+    rsi_overbought,
+    rsi_overbought_for,
+    rsi_oversold,
     signal,
     track_extreme,
     vix_below,
@@ -21,13 +25,29 @@ from signals import (
 )
 from tests.conftest import piecewise
 
-LIBRARY = [vix_below, above_moving_average, deep_dip, vix_stabilizing, rsi_bounce]
+LIBRARY = [
+    vix_below,
+    above_moving_average,
+    deep_dip,
+    vix_stabilizing,
+    rsi_bounce,
+    rsi_oversold,
+    rsi_overbought,
+    rsi_overbought_for,
+    crash_active,
+]
 
 
 def market(vix_points=None, price_points=None):
     price = piecewise(price_points or [(0, 100), (300, 100)])
     vix = piecewise(vix_points)[: len(price)] if vix_points else pd.Series(20.0, price.index)
     return pd.DataFrame({"price": price, "signal": price, "vix": vix.to_numpy(), "risk_free": 0.0})
+
+
+def frame_from(closes):
+    """A market where the instrument (`price`) and its index (`signal`) both follow `closes`."""
+    close = pd.Series(closes, pd.bdate_range("2020-01-01", periods=len(closes)), dtype=float)
+    return pd.DataFrame({"price": close, "signal": close, "vix": 20.0, "risk_free": 0.0})
 
 
 def truth_table():
@@ -167,6 +187,106 @@ def test_rsi_bounce_matches_only_after_prices_turn_up_from_the_low():
     data = pd.DataFrame({"price": close, "signal": close, "vix": 20.0, "risk_free": 0.0})
     first = data.index[rsi_bounce(data)][0]
     assert first > close.index[110]  # prices bottom out on days 90-110; no match before they rise
+
+
+# ---- RSI signals --------------------------------------------------------------------------------
+STEADY_FALL = [100 - 2 * i for i in range(40)]  # only losses, so RSI is 0
+STEADY_RISE = [100 + i for i in range(40)]  # only gains, so RSI is 100
+
+
+def test_rsi_oversold_matches_during_a_steady_fall_and_never_during_a_rise():
+    assert rsi_oversold(frame_from(STEADY_FALL)).iloc[-1]
+    assert not rsi_oversold(frame_from(STEADY_RISE)).any()
+
+
+def test_rsi_oversold_does_not_match_before_rsi_has_enough_days_to_exist():
+    assert not rsi_oversold(frame_from(STEADY_FALL)).iloc[:14].any()  # needs 14 days of changes
+
+
+def test_rsi_oversold_reads_its_level_from_params():
+    data = frame_from(STEADY_FALL)  # RSI is exactly 0 on every day it exists
+    assert not rsi_oversold(data, {"rsi_oversold": {"level": 0}}).any()  # 0 is not below 0
+    assert rsi_oversold(data, {"rsi_oversold": {"level": 1}}).iloc[-1]
+
+
+def test_rsi_overbought_matches_after_a_steady_rise_and_never_during_a_fall():
+    assert rsi_overbought(frame_from(STEADY_RISE)).iloc[-1]
+    assert not rsi_overbought(frame_from(STEADY_FALL)).any()
+
+
+def test_rsi_signals_read_the_instrument_by_default_and_the_index_when_asked():
+    data = frame_from(STEADY_FALL).assign(signal=STEADY_RISE)  # instrument falls, index rises
+    assert rsi_oversold(data).iloc[-1]  # default: the instrument's RSI
+    on_index = rsi_oversold(data, {"rsi_oversold": {"source": "signal"}})
+    assert not on_index.any()  # the index is rising, so not oversold
+
+
+def test_rsi_overbought_for_matches_on_the_seventh_overbought_day_in_a_row():
+    data = frame_from(STEADY_RISE)
+    first_overbought = data.index.get_loc(rsi_overbought(data).idxmax())
+    first_match = data.index.get_loc(rsi_overbought_for(data).idxmax())  # days = 7 by default
+    assert first_match - first_overbought == 6  # days 1-6 of the run are not enough
+
+
+def test_rsi_overbought_for_starts_counting_again_after_a_dip_below_the_level():
+    rise = [100 + i for i in range(40)]
+    dip = [rise[-1] - 10]  # one sharp drop on day 41 pulls RSI below 70
+    closes = rise + dip + [dip[0] + i for i in range(1, 40)]
+    data = frame_from(closes)
+    dip_day = len(rise)
+    assert not rsi_overbought(data).iloc[dip_day]  # the dip broke the run
+    assert not rsi_overbought_for(data).iloc[dip_day]
+    after = data.iloc[dip_day + 1 :]
+    back_above = data.index.get_loc(rsi_overbought(after).idxmax())  # RSI recovers to >= 70
+    matches_again = data.index.get_loc(rsi_overbought_for(after).idxmax())
+    assert matches_again - back_above == 6  # needs a fresh run of seven days
+
+
+def test_rsi_overbought_for_one_day_is_the_same_as_rsi_overbought():
+    data = frame_from(STEADY_RISE)
+    one_day = rsi_overbought_for(data, {"rsi_overbought_for": {"days": 1}})
+    assert one_day.equals(rsi_overbought(data))
+
+
+# ---- crash_active -------------------------------------------------------------------------------
+# rises to 100, falls 30% to 70, recovers to 95 (still 5% under the high), then a new high of 105
+CRASH = [(0, 50), (100, 100), (160, 70), (260, 95), (300, 105), (320, 105)]
+
+
+def test_crash_active_is_off_until_the_fall_reaches_the_depth():
+    on = crash_active(market(price_points=CRASH))
+    assert not on.iloc[100]  # at the high
+    assert not on.iloc[140]  # price 80: only 20% below the high, short of the 25% depth
+    assert on.iloc[155]  # price 72.5: 27.5% below the high
+
+
+def test_crash_active_stays_on_through_a_partial_recovery():
+    on = crash_active(market(price_points=CRASH))
+    assert on.iloc[270]  # price 97.5: recovered a lot, but still below the high of 100
+
+
+def test_crash_active_turns_off_when_the_index_makes_a_new_high():
+    on = crash_active(market(price_points=CRASH))
+    assert not on.iloc[290]  # price 102.5: above the old high of 100
+
+
+def test_crash_active_ignores_a_fall_smaller_than_the_depth():
+    data = market(price_points=[(0, 100), (50, 100), (100, 80), (200, 100)])  # only 20% down
+    assert not crash_active(data).any()
+    assert crash_active(data, {"crash_active": {"depth": 0.15}}).any()  # same fall, lower depth
+
+
+def test_crash_active_turns_on_again_for_a_second_crash():
+    two_crashes = [(0, 100), (40, 60), (80, 110), (120, 60), (160, 115)]
+    on = crash_active(market(price_points=two_crashes))
+    starts = on & ~on.shift(1, fill_value=False)
+    assert starts.sum() == 2
+
+
+def test_crash_active_reads_the_index_by_default_and_the_instrument_when_asked():
+    data = market(price_points=CRASH).assign(signal=100.0)  # index flat, instrument crashes
+    assert not crash_active(data).any()
+    assert crash_active(data, {"crash_active": {"source": "price"}}).any()
 
 
 # ---- helpers ------------------------------------------------------------------------------------

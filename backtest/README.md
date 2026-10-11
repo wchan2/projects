@@ -140,7 +140,9 @@ main.py ──► data.py ──► (price, signal, vix, risk_free)
 ### Signals and composing strategies (`signals.py`)
 - A `Signal` is a reusable, parameterized condition built on the indicators: `signal(data, params)` returns a boolean series,
   true on the days the condition holds, using only data up to that day. The library has `vix_below`,
-  `above_moving_average`, `deep_dip`, `vix_stabilizing` and `rsi_bounce`.
+  `above_moving_average`, `deep_dip`, `vix_stabilizing`, `rsi_bounce`, `rsi_oversold`, `rsi_overbought`,
+  `rsi_overbought_for` (overbought for N days in a row) and `crash_active` (a fall of at least a given depth
+  that lasts until a new high; useful as a gate for other signals).
 - Signals combine with `all_of`, `any_of`, `not_` and `recently(signal, days)`, and a combination is
   itself a signal. Each signal reads its own namespace of `params` (`params["rsi_bounce"]["oversold"]`),
   so a sensitivity grid can sweep any signal's parameters (`"rsi_bounce.oversold": [25, 30, 35]`).
@@ -184,6 +186,7 @@ Terms used in the code and reports, and where they live.
 | **Indicator** | A number calculated from the data each day (RSI value, drawdown from the high, moving average). It has no opinion about what the number means. | `indicators.py` |
 | **RSI** | Relative strength index, 0-100: how strong recent gains are compared with recent losses. | `indicators.py` |
 | **Overbought / oversold** | RSI labels: *overbought* means RSI is high (commonly 70 or more, after a strong run), *oversold* means it is low (commonly 30 or less, after a sharp fall). | `signals.py` |
+| **Crash active** | A crash is on from the day a series closes a set fraction (default 25%) below its high until it makes a new high, even through a partial recovery. Meant to gate other signals. | `signals.py` (`crash_active`) |
 | **Elevated fear / calm** | VIX is a fear gauge, so it is not called overbought or oversold: high VIX is elevated fear (panic), low VIX is calm. | `signals.py` |
 | **Signal** | A reusable yes/no condition about the market on each day ("VIX is fading after a spike"), usually a threshold on an indicator. Uses only data up to that day. | `signals.py` |
 | **Entry signal** | The signal that says "start buying". Signals combine with `all_of`, `any_of`, `not_`, `recently`. | `signals.py` |
@@ -208,8 +211,7 @@ Terms used in the code and reports, and where they live.
 
 Planned, not built. Each step gets its own plan and its own commit.
 
-1. **Indicators and signals (in progress):** the indicator layer is done. Next: new signals
-   (`rsi_oversold`, `rsi_overbought`, `rsi_overbought_for`, `crash_active`).
+1. **Indicators and signals (done):** the indicator layer and the RSI and crash signals.
 2. **Rule-based strategies:** a strategy becomes a set of signals plus a rule that looks at today's
    signals and its current state (flat or holding, days held) and returns BUY, SELL or HOLD. Every
    strategy writes its own exit, so nothing is held by default. First use: hold at least a year, then
