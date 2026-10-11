@@ -6,6 +6,16 @@ sensitivity.
 
 Any ticker works, so the same code runs on TQQQ, FNGU, QQQ, SSO, UPRO, or a plain stock.
 
+The design is built in layers, each doing one job and depending only on the one below it:
+
+| Layer | Job | Example |
+|---|---|---|
+| **Data** | Real prices, VIX and the risk-free rate in one table | `price`, `signal`, `vix`, `risk_free` |
+| **Indicators** | Numbers calculated from the data | the RSI value, how far price is below its high |
+| **Signals** | Neutral yes/no conditions built on indicators | "RSI is below 30" (oversold) |
+| **Strategies** | Combine signals into buying and selling | "buy when VIX fades, RSI bounces and we are in a dip" |
+| **Results** | Trades, equity, performance, reports | `outputs/` |
+
 ## 1. Setup
 
 ```bash
@@ -75,12 +85,24 @@ tuning means changing those. The defaults are starting guesses, not optimized.
 ## 4. How it works
 
 ```
-main.py ──► data.py ──► (price, signal, vix, risk_free) ──► strategies/* ──► StrategyResult ──► report.py
-              │                                                │                  │
-        cached parquet                            strategy.py (contract,     metrics.py · benchmarks.py
-                                                  scale-in engine) ·         sensitivity.py
-                                                  signals.py · portfolio.py
+main.py ──► data.py ──► (price, signal, vix, risk_free)
+              │                   │
+        cached parquet            ▼
+                          indicators.py ──► signals.py ──► strategies/* ──► StrategyResult ──► report.py
+                          (numbers)         (yes/no)       strategy.py       │
+                                                           (contract,        metrics.py · benchmarks.py
+                                                            scale-in engine) sensitivity.py
+                                                            portfolio.py
 ```
+
+**Design principles**
+- **Causal:** every indicator, signal and decision at day *t* uses only data up to day *t*. Tests check
+  this by cutting off later data and confirming nothing earlier changes.
+- **Neutral signals:** a signal only says whether a condition holds. The strategy decides whether that
+  means buy, sell or nothing.
+- **Each component owns its state** and shares only read-only views of it (the data table is the
+  market history, a strategy tracks its own position, and the planned portfolio ledger will keep cash and
+  profit private). See the roadmap.
 
 ### Data (`data.py`)
 - Downloads adjusted closes for the instrument, its signal index, `^VIX` and a risk-free rate
@@ -104,8 +126,19 @@ main.py ──► data.py ──► (price, signal, vix, risk_free) ──► st
   position logged as `skipped`. A strategy only has to supply its entry signal.
 - **No lookahead:** decisions use only data up to that date, and orders fill `execution_lag` days later.
 
+### Indicators (`indicators.py`)
+- An indicator turns the data into a number for each day, and says nothing about what the number
+  means: `rsi` (Wilder's relative strength index, 0-100), `drawdown_from_high` (how far price is below
+  its high, e.g. -0.25), `moving_average`, and `run_length` (how many days in a row a condition has held).
+- They are plain functions of the history they are given: nothing is stored between calls, so a
+  backtest has no hidden indicator state. (RSI is a running average that depends on all earlier data
+  with decaying weight, not just the last 14 closes; a live system would either keep a rolling history
+  buffer or keep the running averages.)
+- A signal turns an indicator into a label by thresholding it: "RSI below 30" is *oversold*, "RSI at
+  or above 70" is *overbought*.
+
 ### Signals and composing strategies (`signals.py`)
-- A `Signal` is a reusable, parameterized condition: `signal(data, params)` returns a boolean series,
+- A `Signal` is a reusable, parameterized condition built on the indicators: `signal(data, params)` returns a boolean series,
   true on the days the condition holds, using only data up to that day. The library has `vix_below`,
   `above_moving_average`, `deep_dip`, `vix_stabilizing` and `rsi_bounce`.
 - Signals combine with `all_of`, `any_of`, `not_` and `recently(signal, days)`, and a combination is
@@ -135,7 +168,8 @@ main.py ──► data.py ──► (price, signal, vix, risk_free) ──► st
 | To add... | Do this |
 |---|---|
 | A strategy | Add a module in `strategies/` exposing `STRATEGY` (usually `scale_in_strategy(entry=<signal>)`); it is picked up automatically |
-| A signal | Decorate a function with `@signal("name", **defaults)` in `signals.py`, then combine it with `all_of` / `any_of` / `recently` |
+| An indicator | Add a causal function that returns a number per day to `indicators.py` |
+| A signal | Decorate a function with `@signal("name", **defaults)` in `signals.py` (usually a threshold on an indicator), then combine it with `all_of` / `any_of` / `recently` |
 | An instrument | Nothing: any ticker works. To read signals from an index instead, add it to `SIGNAL_INDEX` in `data.py` |
 | A data source | `@register("fetcher", "name")` on a function in `data.py` |
 
@@ -147,7 +181,11 @@ Terms used in the code and reports, and where they live.
 |---|---|---|
 | **Instrument** | The thing being bought and sold, e.g. TQQQ. | `data.py` (`price` column) |
 | **Signal index** | The series signals are computed from, e.g. `^NDX` for TQQQ. The `signal` column in the data. | `data.py` (`SIGNAL_INDEX`) |
-| **Signal** | A reusable yes/no condition about the market on each day ("VIX is fading after a spike"). Uses only data up to that day. | `signals.py` |
+| **Indicator** | A number calculated from the data each day (RSI value, drawdown from the high, moving average). It has no opinion about what the number means. | `indicators.py` |
+| **RSI** | Relative strength index, 0-100: how strong recent gains are compared with recent losses. | `indicators.py` |
+| **Overbought / oversold** | RSI labels: *overbought* means RSI is high (commonly 70 or more, after a strong run), *oversold* means it is low (commonly 30 or less, after a sharp fall). | `signals.py` |
+| **Elevated fear / calm** | VIX is a fear gauge, so it is not called overbought or oversold: high VIX is elevated fear (panic), low VIX is calm. | `signals.py` |
+| **Signal** | A reusable yes/no condition about the market on each day ("VIX is fading after a spike"), usually a threshold on an indicator. Uses only data up to that day. | `signals.py` |
 | **Entry signal** | The signal that says "start buying". Signals combine with `all_of`, `any_of`, `not_`, `recently`. | `signals.py` |
 | **Filter / tranche filter** | A signal that must also be true on the day each tranche is bought. If it is false that day, that tranche is skipped (e.g. "VIX is below 30"). It is a check on the buying, not on the decision to start. | `scale_in_strategy(tranche_filter=...)` |
 | **Strategy** | A description, parameters and a `run` function. It turns data into trades and an equity curve. | `strategy.py`, `strategies/` |
@@ -166,7 +204,26 @@ Terms used in the code and reports, and where they live.
 | **Slippage** (`cost_bps`) | Extra cost per trade, in basis points (0.01%). | `strategy.py` (`Context`) |
 | **Lookahead** | Using information from after the day being decided. The tests check that nothing does. | `tests/` |
 
-## 7. Assumptions and caveats
+## 7. Roadmap
+
+Planned, not built. Each step gets its own plan and its own commit.
+
+1. **Indicators and signals (in progress):** the indicator layer is done. Next: new signals
+   (`rsi_oversold`, `rsi_overbought`, `rsi_overbought_for`, `crash_active`).
+2. **Rule-based strategies:** a strategy becomes a set of signals plus a rule that looks at today's
+   signals and its current state (flat or holding, days held) and returns BUY, SELL or HOLD. Every
+   strategy writes its own exit, so nothing is held by default. First use: hold at least a year, then
+   sell once RSI has stayed at 70 or above for a number of days.
+3. **Portfolio ledger:** a separate component that privately tracks cash, shares, cost basis and
+   profit so far, and gives rules a read-only snapshot.
+4. **Sizing:** buying and selling in portions, e.g. a larger position when more signals agree.
+5. **Multi-asset portfolio:** one rule per asset and an allocation and rebalancing layer on top.
+6. **Execution:** composable fill models (which day, which price in the day, slippage and spread) and
+   open/high/low data.
+7. **Fundamentals** (undervalued / overvalued), with point-in-time data to avoid lookahead.
+8. **Machine-learning strategies:** a learned rule on numeric indicators, with walk-forward training.
+
+## 8. Assumptions and caveats
 
 - Taxes and slippage are excluded unless configured (`Context.cost_bps`).
 - Only real prices are used, so history is short (TQQQ has only 2010 onward) and covers few crashes.

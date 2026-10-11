@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from indicators import rsi
 from signals import (
     above_moving_average,
     all_of,
@@ -12,7 +13,6 @@ from signals import (
     label_windows,
     not_,
     recently,
-    rsi,
     rsi_bounce,
     signal,
     track_extreme,
