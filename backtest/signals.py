@@ -19,7 +19,7 @@ from operator import and_, or_
 import numpy as np
 import pandas as pd
 
-from indicators import drawdown_from_high, moving_average, rsi
+from indicators import drawdown_from_high, moving_average, rsi, run_length
 
 
 @dataclass(frozen=True)
@@ -168,6 +168,38 @@ def rsi_bounce(
         & (low["days_since_ref"] >= stable_days)
         & (strength >= low["ref_value"] + bounce)
     )
+
+
+@signal("rsi_oversold", period=14, level=30, source="price")
+def rsi_oversold(data: pd.DataFrame, period: int, level: float, source: str) -> pd.Series:
+    """RSI is below `level` (a sharp recent fall). `source` is the data column RSI is calculated
+    on: "price" (the instrument being traded) or "signal" (its index)."""
+    return rsi(data[source], period) < level
+
+
+@signal("rsi_overbought", period=14, level=70, source="price")
+def rsi_overbought(data: pd.DataFrame, period: int, level: float, source: str) -> pd.Series:
+    """RSI is at or above `level` (a strong recent run-up)."""
+    return rsi(data[source], period) >= level
+
+
+@signal("rsi_overbought_for", period=14, level=70, days=7, source="price")
+def rsi_overbought_for(
+    data: pd.DataFrame, period: int, level: float, days: int, source: str
+) -> pd.Series:
+    """RSI has been at or above `level` for at least `days` trading days in a row: overbought for
+    a sustained stretch, not just one day."""
+    return run_length(rsi(data[source], period) >= level) >= days
+
+
+@signal("crash_active", depth=0.25, source="signal")
+def crash_active(data: pd.DataFrame, depth: float, source: str) -> pd.Series:
+    """A crash is on. It starts the day the series closes at least `depth` (fraction) below its
+    running high and stays on, even through a partial recovery, until the series makes a new high.
+    Useful as a gate: only look at other signals while a crash is on."""
+    drawdown = drawdown_from_high(data[source])
+    episode = label_windows((drawdown <= -depth).to_numpy(), (drawdown >= 0).to_numpy())
+    return pd.Series(episode >= 0, index=data.index)
 
 
 # ---- building blocks (causal helpers) -----------------------------------------------------------
